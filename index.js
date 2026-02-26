@@ -16,7 +16,7 @@ const cors = require('cors');
 const PORT = process.env.PORT ||5050;
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
-const frontendPath = path.join(__dirname, '../../frontend');
+const frontendPath = path.join(__dirname, './');
 const frameDir = path.join(__dirname, 'static/frames');
 app.use(cors());
 

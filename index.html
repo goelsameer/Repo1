@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Drone Indexer | Geospatial AI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+    @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in {
+    animation: fadeIn 0.5s ease-out forwards;
+}
+  #map { 
+        height: 400px; 
+        width: 100%; 
+        border: 2px solid #e5e7eb; 
+        border-radius: 0.5rem;
+        margin-bottom: 1.5rem;
+        z-index: 1; /* Ensures it stays below dropdowns but above background */
+    }
+</style>
+<body class="bg-gray-50 p-6 text-gray-900">
+<div id="map"></div>
+    <div class="max-w-4xl mx-auto bg-white shadow-sm border border-gray-200 rounded-lg p-6">
+        <h1 class="text-xl font-bold mb-4">Drone Footage Indexer</h1>
+
+        <div class="grid grid-cols-1 gap-4 mb-6">
+            <div>
+                <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Telemetry JSON Log (Array)</label>
+                <textarea id="telemetryInput" placeholder='[{"drone_id": "sicomet12", "timestamp": "00:00:01", "gps": {"lat": 40.7, "lng": -74.0}}, ...]' 
+                    class="w-full h-32 border border-gray-300 rounded px-3 py-2 text-xs font-mono outline-none focus:ring-1 focus:ring-blue-500"></textarea>
+                <p class="text-[10px] text-gray-400 mt-1 italic">Note: Ensure the array length matches the video duration (1 second per entry).</p>
+            </div>
+        </div>
+
+        <div class="border-2 border-dashed border-gray-300 rounded p-8 text-center mb-8">
+            <input type="file" id="upload" class="hidden">
+            <label for="upload" class="cursor-pointer bg-gray-100 text-gray-700 border border-gray-300 px-4 py-2 rounded hover:bg-gray-200">
+                1. Select Video
+            </label>
+            <p id="file-name" class="mt-2 text-xs text-gray-500">No file selected</p>
+            
+            <button id="process-btn" class="mt-4 bg-blue-600 text-white px-6 py-2 rounded font-bold hover:bg-blue-700 block mx-auto">
+                2. Start AI Indexing
+            </button>
+            <p id="status" class="mt-3 text-sm italic"></p>
+        </div>
+
+        <div class="flex gap-2 mb-4">
+            <input type="text" id="search" placeholder="Search by Tag, Drone ID, or GPS..." 
+                class="flex-1 border border-gray-300 rounded px-3 py-2 outline-none focus:ring-1 focus:ring-blue-500">
+        </div>
+
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-sm border-collapse">
+                <thead>
+                    <tr class="border-b border-gray-200 bg-gray-50">
+                        <th class="p-3">Asset Info</th>
+                        <th class="p-3">Year</th>
+                        <th class="p-3">AI Tags</th>
+                        <th class="p-3">Location (GPS)</th>
+                    </tr>
+                </thead>
+                <tbody id="table-body"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+const socket = io(); 
+
+const uploadInput = document.getElementById('upload');
+const processBtn = document.getElementById('process-btn');
+const fileNameLabel = document.getElementById('file-name');
+const status = document.getElementById('status');
+const tableBody = document.getElementById('table-body');
+const searchInput = document.getElementById('search');
+const telemetryInput = document.getElementById('telemetryInput');
+let resultSet=[];
+
+const map = L.map('map').setView([40.7128, -74.0060], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+let markers = []; 
+
+socket.on('new-frame', (item) => {
+
+    renderRow(item);
+    resultSet.push(item.caption);
+    if (item.gps && item.gps.lat) {
+        map.panTo([item.gps.lat, item.gps.lng]);
+    }
+});
+
+function renderRow(item) {
+    const row = tableBody.insertRow(0); 
+    row.className = "border-b border-gray-100 hover:bg-gray-50 transition-colors animate-fade-in";
+    
+    const tagBubbles = item.tag ? item.tag.split(',')
+        .map(t => `<span class="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-[10px] font-bold uppercase mr-1">${t.trim()}</span>`)
+        .join('') : '<span class="text-gray-400 italic text-[10px]">No tags</span>';
+    row.setAttribute('data-caption', item.caption.toLowerCase());
+    row.innerHTML = `
+        <td class="p-3">
+            <div class="flex items-center gap-3">
+                <img src="${item.imageUrl}" class="w-20 h-12 object-cover rounded border shadow-sm bg-gray-200">
+                <div class="flex flex-col">
+                    <span class="font-medium text-xs text-gray-900">${item.droneID}</span>
+                    <span class="text-[10px] text-gray-500 italic">TS: ${item.timestamp}</span>
+                </div>
+            </div>
+        </td>
+        <td class="p-3 text-gray-500 text-xs">${new Date().getFullYear()}</td>
+        <td class="p-3"><div class="flex flex-wrap gap-1">${tagBubbles}</div></td>
+        <td class="p-3">
+            <div class="flex flex-col">
+                <span class="text-green-600 font-mono text-[10px] font-bold uppercase">Locked</span>
+                <span class="text-[9px] text-gray-400 font-mono">${item.gps.lat}, ${item.gps.lng}</span>
+            </div>
+        </td>
+    `;
+}
+
+uploadInput.addEventListener('change', () => {
+    if(uploadInput.files[0]) fileNameLabel.innerText = uploadInput.files[0].name;
+});
+
+processBtn.addEventListener('click', async () => {
+    const file = uploadInput.files[0];
+    if (!file) return alert("Please select a video file first.");
+
+    const rawTelemetry = telemetryInput.value.trim();
+    if (!rawTelemetry) return alert("Please paste a telemetry JSON array.");
+
+    status.innerText = `Starting Stream Indexing...`;
+    status.className = "mt-3 text-sm text-blue-600 font-bold animate-pulse";
+
+    const formData = new FormData();
+    formData.append('video', file);
+    formData.append('telemetry', rawTelemetry);
+
+    try {
+        await fetch('/upload', { method: 'POST', body: formData });
+        
+        status.innerText = "Indexing Pipeline Active...";
+    } catch (error) {
+        console.error(error);
+        status.innerText = "Error: Check connectivity.";
+    }
+});
+let counter=0;
+function calculateSearchScore(query) {
+    if (!query || resultSet.length === 0) return null;
+
+    let winner = { text: "", score: 0 };
+    const queryWords = query.toLowerCase().split(/\s+/);
+    
+    resultSet.forEach((caption) => {
+        const text = caption.toLowerCase();
+        let score = 0;
+
+        if (text.includes(query.toLowerCase())) score += 100;
+
+        queryWords.forEach(word => {
+            if (text.includes(word)) score += 10;
+        });
+
+        if (score > winner.score) {
+            winner = { text: caption, score: score };
+        }
+    });
+
+    return winner.score > 0 ? winner.text : null;
+}
+function sanitizeQuery(str) {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); 
+}
+searchInput.addEventListener('keyup', (e) => {
+    const query =sanitizeQuery(e.target.value.toLowerCase().trim());
+    const rows = document.querySelectorAll('#table-body tr');
+
+    const bestCaption = calculateSearchScore(query);
+
+    rows.forEach(row => {
+        const rowCaption = row.getAttribute('data-caption') || "";
+        const rowText = row.innerText.toLowerCase();
+
+        const isBasicMatch = rowText.includes(query);
+        const isIntelligentWinner = (bestCaption && rowCaption === bestCaption.toLowerCase());
+
+        if (query === "") {
+            row.style.display = '';
+            row.classList.remove('bg-yellow-50');
+        } else if (isBasicMatch || isIntelligentWinner) {
+            row.style.display = '';
+            
+            if (isIntelligentWinner) {
+                row.classList.add('bg-yellow-50'); 
+            } else {
+                row.classList.remove('bg-yellow-50');
+            }
+        } else {
+            row.style.display = 'none';
+        }
+    });
+});
+
+function calculateDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371; 
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+map.on('click', function(e) {
+    const clickedLat = e.latlng.lat;
+    const clickedLng = e.latlng.lng;
+
+    if (window.activeCircle) map.removeLayer(window.activeCircle);
+    window.activeCircle = L.circle(e.latlng, {
+        radius: 100, 
+        color: '#f59e0b', 
+        fillOpacity: 0.2
+    }).addTo(map);
+
+    const rows = document.querySelectorAll('#table-body tr');
+    let nearestRow = null;
+    let minDistance = Infinity;
+
+    rows.forEach(row => {
+        const gpsCell = row.querySelectorAll('td')[3];
+        const coordsMatch = gpsCell.innerText.match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
+
+        if (coordsMatch) {
+            const lat = parseFloat(coordsMatch[1]);
+            const lng = parseFloat(coordsMatch[2]);
+            const dist = calculateDistance(clickedLat, clickedLng, lat, lng);
+
+            if (dist < minDistance) {
+                minDistance = dist;
+                nearestRow = row;
+            }
+        }
+    });
+
+    // 3. UI Update: Highlight and Scroll
+    if (nearestRow) {
+        // Remove old highlights
+        rows.forEach(r => {
+            r.classList.remove('bg-yellow-100', 'ring-2', 'ring-amber-500');
+            r.style.display = ''; // Show all rows again (Seek mode)
+        });
+
+        // Highlight the nearest one
+        nearestRow.classList.add('bg-yellow-100', 'ring-2', 'ring-amber-500');
+        nearestRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+        console.log(`Seeked to nearest frame: ${minDistance.toFixed(3)}km away.`);
+    }
+});
+</script>
+</body>
+</html>
